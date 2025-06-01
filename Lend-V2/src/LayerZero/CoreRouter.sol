@@ -5,12 +5,12 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
-import "./LendStorage.sol";
+import "./LendStorage.sol"; // all states are here
 import "../LToken.sol";
 import "../LErc20Delegator.sol";
-import "./interaces/LendtrollerInterfaceV2.sol";
+import "./interaces/LendtrollerInterfaceV2.sol"; // Risk management and policies
 import "./interaces/LendInterface.sol";
-import "./interaces/UniswapAnchoredViewInterface.sol";
+import "./interaces/UniswapAnchoredViewInterface.sol"; // price oracle
 
 /**
  * @title CoreRouter
@@ -59,30 +59,38 @@ contract CoreRouter is Ownable, ExponentialNoError {
      * @param _token The address of the token to be supplied.
      */
     function supply(uint256 _amount, address _token) external {
-        address _lToken = lendStorage.underlyingTolToken(_token);
+        address _lToken = lendStorage.underlyingTolToken(_token); // get the ltoken for underlying token
 
         require(_lToken != address(0), "Unsupported Token");
 
         require(_amount > 0, "Zero supply amount");
+
+        //@>q no maximum _amount check? can make a DOS here? 
 
         // Transfer tokens from the user to the contract
         IERC20(_token).safeTransferFrom(msg.sender, address(this), _amount);
 
         _approveToken(_token, _lToken, _amount);
 
+        //@>q where can I find LTokenInterface implemantaions to see codes?
         // Get exchange rate before mint
         uint256 exchangeRateBefore = LTokenInterface(_lToken).exchangeRateStored();
+        //@>q exchangeRateStored may be staled? shouldn't we use exchangeRateCurrent?
 
-        // Mint lTokens
+        //@>i lTokens are minted for corerouter not users. BAlances are managed in lendstorage. This is a significant deviation from standard Compound V2 where users directly hold their lTokens
+        // Mint lTokens @>i User Tokens → CoreRouter → lToken.mint() → lTokens minted to CoreRouter
         require(LErc20Interface(_lToken).mint(_amount) == 0, "Mint failed");
 
+        //@>q miscalculations?  is real amount of mintToken == calculated tokens
         // Calculate actual minted tokens using exchangeRate from before mint
         uint256 mintTokens = (_amount * 1e18) / exchangeRateBefore;
 
+        //@>i update state
         lendStorage.addUserSuppliedAsset(msg.sender, _lToken);
 
         lendStorage.distributeSupplierLend(_lToken, msg.sender);
 
+        //@>q totalInvestment: Is it lToken balance or underlying balance? Investment :  user's total investment per lToken
         // Update total investment using calculated mintTokens
         lendStorage.updateTotalInvestment(
             msg.sender, _lToken, lendStorage.totalInvestment(msg.sender, _lToken) + mintTokens
@@ -97,16 +105,17 @@ contract CoreRouter is Ownable, ExponentialNoError {
      * @param _lToken The address of the lToken to be redeemed.
      * @return An enum indicating the error status.
      */
+    //@>q can someone redeem when he has an active borrow??
     function redeem(uint256 _amount, address payable _lToken) external returns (uint256) {
         // Redeem lTokens
         address _token = lendStorage.lTokenToUnderlying(_lToken);
-
+        //@>q where do we validate _token?  Could be zero address for unsupported lToken
         require(_amount > 0, "Zero redeem amount");
-
+        //@>q Is totalInvestment the correct balance to check? is it underlying token amount or lToken amount? it seems it is underlying asset
         // Check if user has enough balance before any calculations
         require(lendStorage.totalInvestment(msg.sender, _lToken) >= _amount, "Insufficient balance");
 
-        // Check liquidity
+        // Check liquidity -Checks if redeem would cause undercollateralization
         (uint256 borrowed, uint256 collateral) =
             lendStorage.getHypotheticalAccountLiquidityCollateral(msg.sender, LToken(_lToken), _amount, 0);
         require(collateral >= borrowed, "Insufficient liquidity");
@@ -122,6 +131,9 @@ contract CoreRouter is Ownable, ExponentialNoError {
 
         // Transfer underlying tokens to the user
         IERC20(_token).transfer(msg.sender, expectedUnderlying);
+         //@>q Critical: Uses unsafe transfer() instead of safeTransfer()
+         // Critical: No check if transfer succeeded
+
 
         // Update total investment
         lendStorage.distributeSupplierLend(_lToken, msg.sender);
@@ -143,6 +155,8 @@ contract CoreRouter is Ownable, ExponentialNoError {
      * @param _token Address of the token to borrow
      */
     function borrow(uint256 _amount, address _token) external {
+        //@>q can we use negative _amount? NO - it's uint
+        //@>q can we do micro-borrowing attacks with 1 wei? as there is no checks for it
         require(_amount != 0, "Zero borrow amount");
 
         address _lToken = lendStorage.underlyingTolToken(_token);
@@ -154,18 +168,21 @@ contract CoreRouter is Ownable, ExponentialNoError {
 
         LendStorage.BorrowMarketState memory currentBorrow = lendStorage.getBorrowBalance(msg.sender, _lToken);
 
+        //@>q audit: shouldn't this be currentBorrow instead of borrowed?
         uint256 borrowAmount = currentBorrow.borrowIndex != 0
             ? ((borrowed * LTokenInterface(_lToken).borrowIndex()) / currentBorrow.borrowIndex)
             : 0;
-
+        //@>i Critical: Due to wrong calculation above, this check is meaningless
         require(collateral >= borrowAmount, "Insufficient collateral");
 
         // Enter the Compound market
         enterMarkets(_lToken);
 
-        // Borrow tokens
+        // Borrow tokens -Execute Borrow
         require(LErc20Interface(_lToken).borrow(_amount) == 0, "Borrow failed");
-
+        //@>q what token are acceptable? Whitelisted only (e.g BTC, ETH, USDC, DAI, USDT). ERC20 standard.
+        //@>q why Uses unsafe transfer() instead of safeTransfer()?
+        //@>q some tokens like usdt returns false instead of revert on failure. how can I write poc to make a dos or distupt calculation?
         // Transfer borrowed tokens to the user
         IERC20(_token).transfer(msg.sender, _amount);
 
@@ -192,6 +209,9 @@ contract CoreRouter is Ownable, ExponentialNoError {
     /**
      * @dev Only callable by CrossChainRouter
      */
+    //@>i critical crosschain area
+    //@>q Assumes CrossChainRouter did all validation. is the router trusted?
+    //@>q it seems crosschainrouter calls this after receiving a borrow crosschain request. why didn't we contrain this to authorized crosschain? do all user need this function? 
     function borrowForCrossChain(address _borrower, uint256 _amount, address _destlToken, address _destUnderlying)
         external
     {
@@ -200,8 +220,12 @@ contract CoreRouter is Ownable, ExponentialNoError {
         require(msg.sender == crossChainRouter, "Access Denied");
 
         require(LErc20Interface(_destlToken).borrow(_amount) == 0, "Borrow failed");
-
+        //@>q can ervert silently? 
         IERC20(_destUnderlying).transfer(_borrower, _amount);
+         // @>q how can someone make use of this silent revert to exploit?
+         // require(IERC20(_destUnderlying).transfer(_borrower, _amount), "Transfer failed");
+
+
     }
 
     /**
@@ -212,7 +236,8 @@ contract CoreRouter is Ownable, ExponentialNoError {
     function repayBorrow(uint256 _amount, address _lToken) public {
         repayBorrowInternal(msg.sender, msg.sender, _amount, _lToken, true);
     }
-
+     
+     //@>i critical crosschain area 
     function repayCrossChainLiquidation(address _borrower, address _liquidator, uint256 _amount, address _lToken)
         external
     {
@@ -227,22 +252,32 @@ contract CoreRouter is Ownable, ExponentialNoError {
      * @param lTokenCollateral The address of the collateral lToken
      * @param borrowedAsset The address of the asset that was borrowed
      */
+
+    //@>i critical area
     function liquidateBorrow(address borrower, uint256 repayAmount, address lTokenCollateral, address borrowedAsset)
         external
     {
+        //@>q no checks for zero address/zero ammounts?
+        //@>q borrower can be set to msg.sender?
         // The lToken of the borrowed asset
         address borrowedlToken = lendStorage.underlyingTolToken(borrowedAsset);
+        //@>q  Could return zero address if asset unsupported?
 
+        //@>i external call: Updates interest before calculations
         LTokenInterface(borrowedlToken).accrueInterest();
 
+        //@>i external call to lendStorage: Gets current financial state
         (uint256 borrowed, uint256 collateral) =
             lendStorage.getHypotheticalAccountLiquidityCollateral(borrower, LToken(payable(borrowedlToken)), 0, 0);
 
+        //@>i execute liquidation
+        //@>q why Passes all validation responsibility to internal function? 
         liquidateBorrowInternal(
             msg.sender, borrower, repayAmount, lTokenCollateral, payable(borrowedlToken), collateral, borrowed
         );
     }
 
+    
     /**
      * @notice Internal function to liquidate a borrower's position
      * @param liquidator The address of the liquidator
@@ -253,6 +288,7 @@ contract CoreRouter is Ownable, ExponentialNoError {
      * @param collateral The collateral amount
      * @param borrowed The borrowed amount
      */
+    //@>i Core liquidation logic
     function liquidateBorrowInternal(
         address liquidator,
         address borrower,
@@ -262,18 +298,24 @@ contract CoreRouter is Ownable, ExponentialNoError {
         uint256 collateral,
         uint256 borrowed
     ) internal {
+
+        //@>audit: wrong message for the check 
         require(
             liquidateBorrowAllowedInternal(borrowedlToken, borrower, repayAmount, collateral, borrowed) == 0,
             "Borrow not allowed"
-        );
+        ); 
         require(borrower != liquidator, "Liquidator cannot be borrower");
         require(repayAmount > 0, "Repay amount not zero");
 
         repayBorrowInternal(borrower, liquidator, repayAmount, borrowedlToken, true);
 
+        // @>audit If liquidator != msg.sender, funds would be taken from liquidator in repayBorrowInternal
+        // but rewards would go to msg.sender in liquidateSeizeUpdate, potentially causing theft of liquidation rewards
         // Liquidation logic for same chain
         liquidateSeizeUpdate(msg.sender, borrower, lTokenCollateral, borrowedlToken, repayAmount);
     }
+
+    //@>i Handle collateral seizure calculations
 
     function liquidateSeizeUpdate(
         address sender,
@@ -367,6 +409,7 @@ contract CoreRouter is Ownable, ExponentialNoError {
      * @param borrowers Whether to claim for borrowers
      * @param suppliers Whether to claim for suppliers
      */
+    //@>i Transfers LEND tokens to users
     function claimLend(address[] memory holders, LToken[] memory lTokens, bool borrowers, bool suppliers) external {
         LendtrollerInterfaceV2(lendtroller).claimLend(address(this));
 
@@ -456,6 +499,7 @@ contract CoreRouter is Ownable, ExponentialNoError {
      * @param _amount The amount of tokens to repay
      * @param _lToken The address of the lToken representing the borrowed asset
      */
+    //@>i Common repayment logic for both regular and cross-chain repays
     function repayBorrowInternal(
         address borrower,
         address liquidator,
@@ -486,7 +530,7 @@ contract CoreRouter is Ownable, ExponentialNoError {
 
         lendStorage.distributeBorrowerLend(_lToken, borrower);
 
-        // Repay borrowed tokens
+        // Repay borrowed tokens = execute Repay
         require(LErc20Interface(_lToken).repayBorrow(repayAmountFinal) == 0, "Repay failed");
 
         // Update same-chain borrow balances

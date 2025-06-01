@@ -14,13 +14,19 @@ import "../LErc20Delegator.sol";
 import "./interaces/LendtrollerInterfaceV2.sol";
 import "./interaces/LendInterface.sol";
 import "./interaces/UniswapAnchoredViewInterface.sol";
+/* @>q 
+What happens if cross-chain messages fail or are delayed?
+Can liquidations be manipulated through cross-chain timing attacks?
 
+No gas estimation or validation for cross-chain operations. what attacks can be done related to Gas?
+*/
 /**
  * @title CrossChainRouter
  * @notice Handles all cross-chain lending operations
  * @dev Works with LendStorage for state management and LayerZero for cross-chain messaging
  */
 contract CrossChainRouter is OApp, ExponentialNoError {
+    //@>i inherits layer0 V2
     using SafeERC20 for IERC20;
     using OptionsBuilder for bytes;
 
@@ -45,11 +51,12 @@ contract CrossChainRouter is OApp, ExponentialNoError {
         uint8 contractType;
     }
 
+    //@>i layerZero message types 
     enum ContractType {
-        BorrowCrossChain,
+        BorrowCrossChain,//@>i execute borrow on dest chain - critial point = cross-chain validation
         ValidBorrowRequest,
         DestRepay,
-        CrossChainLiquidationExecute,
+        CrossChainLiquidationExecute, //@>i acction seize collateral - critical point = asset seizure
         LiquidationSuccess,
         LiquidationFailure
     }
@@ -79,9 +86,11 @@ contract CrossChainRouter is OApp, ExponentialNoError {
         address _lendtroller,
         address payable _coreRouter,
         uint32 _srcEid
-    ) OApp(_endpoint, _delegate) {
+    ) OApp(_endpoint, _delegate) { 
         require(_lendStorage != address(0), "Invalid storage address");
+
         lendStorage = LendStorage(_lendStorage);
+
         priceOracle = _priceOracle;
         lendtroller = _lendtroller;
         coreRouter = _coreRouter;
@@ -96,6 +105,7 @@ contract CrossChainRouter is OApp, ExponentialNoError {
     function withdrawEth() external onlyOwner {
         uint256 balance = address(this).balance;
         require(balance > 0, "No ETH to withdraw");
+        //@>q is it ok to let the admin to withdraw all balance? there is no way to withdraw part of it!
         (bool success,) = msg.sender.call{value: balance}("");
         require(success, "ETH transfer failed");
     }
@@ -110,6 +120,7 @@ contract CrossChainRouter is OApp, ExponentialNoError {
      * @param _borrowToken Token to borrow on destination chain
      * @param _destEid Destination chain's layer zero endpoint id
      */
+    //@>i the most critical entry point - collateral is on src chain and borrow from dest chain. Borrow initiation > Borrow Confirmation > repayment > Liquidation Execution
     function borrowCrossChain(uint256 _amount, address _borrowToken, uint32 _destEid) external payable {
         require(msg.sender != address(0), "Invalid sender");
         require(_amount != 0, "Zero borrow amount");
@@ -194,6 +205,8 @@ contract CrossChainRouter is OApp, ExponentialNoError {
     /**
      * ============================================ INTERNAL FUNCTIONS ============================================
      */
+    //@>i Validate liquidation eligibility
+
     function _validateAndPrepareLiquidation(LendStorage.LiquidationParams memory params) private view {
         require(params.borrower != msg.sender, "Liquidator cannot be borrower");
         require(params.repayAmount > 0, "Repay amount cannot be zero");
@@ -269,7 +282,7 @@ contract CrossChainRouter is OApp, ExponentialNoError {
             .liquidateCalculateSeizeTokens(borrowedlToken, params.lTokenToSeize, params.repayAmount);
 
         require(amountSeizeError == 0, "Seize calculation failed");
-
+        //@>q can someone do replay attack? there is no specific replay attack protection
         // Send message to Chain A to execute the seize
         _send(
             params.srcEid,
@@ -309,6 +322,8 @@ contract CrossChainRouter is OApp, ExponentialNoError {
      * @notice Handles the final liquidation execution on Chain A (collateral chain)
      * @param payload The decoded message payload
      */
+
+    //@>i Execute collateral seizure on collateral chain
     function _handleLiquidationExecute(LZPayload memory payload, uint32 srcEid) private {
         // Execute the seize of collateral
         uint256 protocolSeizeShare = mul_(payload.amount, Exp({mantissa: lendStorage.PROTOCOL_SEIZE_SHARE_MANTISSA()}));
@@ -365,6 +380,7 @@ contract CrossChainRouter is OApp, ExponentialNoError {
         );
     }
 
+    //@>i Internal repayment processing
     function repayCrossChainBorrowInternal(
         address borrower,
         address repayer,
@@ -394,6 +410,7 @@ contract CrossChainRouter is OApp, ExponentialNoError {
         emit RepaySuccess(borrower, _token, repayAmountFinal);
     }
 
+    //@>i  Retrieve and calculate current borrow details
     function _getBorrowDetails(address borrower, address _token, address _lToken, uint32 _srcEid)
         private
         view
@@ -428,7 +445,10 @@ contract CrossChainRouter is OApp, ExponentialNoError {
     /**
      * Checked on chain A (source chain), as that's where the collateral exists.
      */
+
+    //@>i  Verify position is undercollateralized
     function _checkLiquidationValid(LZPayload memory payload) private view returns (bool) {
+        //@>q can someone fool this check to seize a victim's asset?
         (uint256 borrowed, uint256 collateral) = lendStorage.getHypotheticalAccountLiquidityCollateral(
             payload.sender, LToken(payable(payload.destlToken)), 0, payload.amount
         );
@@ -578,6 +598,7 @@ contract CrossChainRouter is OApp, ExponentialNoError {
      * @param payload LayerZero payload containing borrow details
      * @param srcEid Source chain ID where collateral exists
      */
+    //@>i Execute borrow, updata state, send confirmation
     function _handleBorrowCrossChainRequest(LZPayload memory payload, uint32 srcEid) private {
         // Accrue interest on borrowed token on destination chain
         LTokenInterface(payload.destlToken).accrueInterest();
@@ -739,6 +760,8 @@ contract CrossChainRouter is OApp, ExponentialNoError {
      * @param _origin The origin data of the message.
      * @param _payload The payload of the message.
      */
+    //@>i Internal function, only callable by LayerZero 
+    //@>q why there is no replay protection here? No nonce or unique ID checking
     function _lzReceive(
         Origin calldata _origin,
         bytes32, /*_guid*/
@@ -746,6 +769,7 @@ contract CrossChainRouter is OApp, ExponentialNoError {
         address, /*_executor*/
         bytes calldata /*_extraData*/
     ) internal override {
+        //@>audit there is no expiration for cross-chain message. message can delay signigicantly. liquidation validity is checked on chainA(collateral chain) using current market prices in _checkliquidationValid. Delay between initiating liquidation on chainB and verification on chainA may lead to drastic change in market conditions : 1 - allow liquidation when user is no longer undercollateralized 2- prevent ligitimate liquidation if prices move favorably for the borrower
         LZPayload memory payload;
 
         // Decode individual fields from payload
@@ -760,8 +784,13 @@ contract CrossChainRouter is OApp, ExponentialNoError {
             payload.contractType
         ) = abi.decode(_payload, (uint256, uint256, uint256, address, address, address, address, uint8));
 
+        //@>q why there is no validation for decoded data? no zero,large, and out of bound checks
+
         uint32 srcEid = _origin.srcEid;
+        //@>i this cast will revert if contractType is out of bound
         ContractType cType = ContractType(payload.contractType);
+
+    
         // Handle different message types
         if (cType == ContractType.BorrowCrossChain) {
             _handleBorrowCrossChainRequest(payload, srcEid);
@@ -770,6 +799,7 @@ contract CrossChainRouter is OApp, ExponentialNoError {
         } else if (cType == ContractType.DestRepay) {
             _handleDestRepayMessage(payload, srcEid);
         } else if (cType == ContractType.CrossChainLiquidationExecute) {
+            //@>q how can someone seize an asset from a victim while he is not undercollatralized?
             if (_checkLiquidationValid(payload)) {
                 _handleLiquidationExecute(payload, srcEid);
             } else {

@@ -321,6 +321,7 @@ abstract contract LToken is LTokenInterface, ExponentialNoError, TokenErrorRepor
      * @dev This calculates interest accrued from the last checkpointed block
      *   up to the current block and writes new checkpoint to storage.
      */
+    //@>i main function for accrueInterest calculation
     function accrueInterest() public virtual override returns (uint256) {
         /* Remember the initial block number */
         uint256 currentBlockNumber = getBlockNumber();

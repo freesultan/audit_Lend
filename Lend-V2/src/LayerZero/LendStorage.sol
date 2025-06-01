@@ -10,6 +10,16 @@ import "../LTokenInterfaces.sol";
 import "../ExponentialNoError.sol";
 import "./interaces/UniswapAnchoredViewInterface.sol";
 
+/**@>q test these: 
+ * 
+  The mismatch between totalInvestment tracking and actual lToken balances could allow:
+
+Over-borrowing: If tracking shows more collateral than reality
+Prevented withdrawals: If tracking shows less balance than reality
+Incorrect liquidations: Based on wrong liquidity calculations
+ 
+ */
+
 /**
  * @title LendStorage
  * @notice Contract responsible for storing all state variables used by CoreRouter and NewCrossChainRouter
@@ -25,14 +35,30 @@ contract LendStorage is Ownable, ExponentialNoError {
     // Protocol constants
     uint256 public constant PROTOCOL_SEIZE_SHARE_MANTISSA = 2.8e16; // 2.8%
     uint224 public constant LEND_INITIAL_INDEX = 1e36;
+
+    /* 
+        How are cross-chain borrows and collaterals kept synchronized?
+What happens if interest calculations overflow or underflow?
+Are there sufficient checks for authorized contract management?
+How does the protocol handle failed cross-chain operations? 
+What are the gas implications of complex calculation functions? can we create a griefing attack?
+
+
+    */
+
+    //@>i liquidity calc and intereset calc = critical
+
     // Structs
+    //Borrow: Cross-chain borrow/collateral record
+    //@>i critical struct state
+    //@>q how someone do Cross-chain state manipulation?
 
     struct Borrow {
         uint256 srcEid; // Source chain's layer zero endpoint id
         uint256 destEid; // Destination chain's layer zero endpoint id
         uint256 principle; // Borrowed token amount
         uint256 borrowIndex; // Borrow index
-        address borrowedlToken; // Address of the borrower
+        address borrowedlToken; // Address of the borrower //@>q what's this?
         address srcToken; // Source token address
     }
 
@@ -40,7 +66,7 @@ contract LendStorage is Ownable, ExponentialNoError {
         uint256 amount; // Borrowed amount
         uint256 borrowIndex; // Borrow index when last updated
     }
-
+    // Liquidation process data
     struct LiquidationParams {
         address borrower;
         uint256 repayAmount;
@@ -51,7 +77,7 @@ contract LendStorage is Ownable, ExponentialNoError {
         uint256 borrowPrinciple;
         address borrowedlToken;
     }
-
+    //Liquidity calculation helpers
     struct AccountLiquidityLocalVars {
         uint256 sumCollateral;
         uint256 sumBorrowPlusEffects;
@@ -123,8 +149,9 @@ contract LendStorage is Ownable, ExponentialNoError {
         currentEid = _currentEid;
     }
 
-    // Authorization functions
+    // Authorization functions = gran/revoke contract permissions
     function setAuthorizedContract(address _contract, bool _authorized) external onlyOwner {
+        //@>i set crosschain and core routers
         authorizedContracts[_contract] = _authorized;
         emit ContractAuthorized(_contract, _authorized);
     }
@@ -136,18 +163,28 @@ contract LendStorage is Ownable, ExponentialNoError {
     }
 
     // Asset management functions
+    // The onlyOwner modifier on asset management functions creates a centralization risk
+    // as the protocol relies on the owner to correctly map tokens across the system.
+    // If incorrect mappings are set, it could lead to issues with collateral valuation,
+    // cross-chain messaging, or potentially allow exploitation of token price differences.
+    //@>q onlyowner is trusted to he add the correct pair of tokens?
+
     function addSupportedTokens(address underlying, address lToken) external onlyOwner {
         require(underlying != address(0) && lToken != address(0), "Invalid addresses");
+
         underlyingTolToken[underlying] = lToken;
         lTokenToUnderlying[lToken] = underlying;
+
         emit LTokenAdded(underlying, lToken);
     }
 
+        //@>i map underlying token to dest underlyig token
     function addUnderlyingToDestUnderlying(address underlying, address destUnderlying, uint256 destId)
         external
         onlyOwner
     {
         require(underlying != address(0) && destUnderlying != address(0), "Invalid addresses");
+
         underlyingToDestUnderlying[underlying][destId] = destUnderlying;
         emit UnderlyingToDestUnderlyingSet(underlying, destId, destUnderlying);
     }
@@ -158,7 +195,7 @@ contract LendStorage is Ownable, ExponentialNoError {
         emit UnderlyingToDestlTokenSet(underlying, destId, destlToken);
     }
 
-    // User asset tracking functions
+    // User asset tracking functions =  Get the Array of lToken addresses
     function getUserSuppliedAssets(address user) external view returns (address[] memory) {
         return userSuppliedAssets[user].values();
     }
@@ -166,7 +203,7 @@ contract LendStorage is Ownable, ExponentialNoError {
     function getUserBorrowedAssets(address user) external view returns (address[] memory) {
         return userBorrowedAssets[user].values();
     }
-
+    //@>i onlyAuthorized means core or crosschain router
     function addUserSuppliedAsset(address user, address lTokenAddress) external onlyAuthorized {
         if (!userSuppliedAssets[user].contains(lTokenAddress)) {
             userSuppliedAssets[user].add(lTokenAddress);
@@ -251,6 +288,7 @@ contract LendStorage is Ownable, ExponentialNoError {
         delete borrowBalance[user][lToken];
     }
 
+    //@>i  record crosschain borrows - crosschain contract calls this
     function addCrossChainBorrow(address user, address underlying, Borrow memory newBorrow) external onlyAuthorized {
         crossChainBorrows[user][underlying].push(newBorrow);
     }
@@ -295,6 +333,8 @@ contract LendStorage is Ownable, ExponentialNoError {
         return crossChainCollaterals[user][token];
     }
 
+
+    //@>audit the natspec is incorrect. why "or borrower"?
     /**
      * @notice Distributes LEND tokens to the supplier or borrower
      * @param lToken The address of the lToken representing the asset
@@ -314,6 +354,7 @@ contract LendStorage is Ownable, ExponentialNoError {
 
         // Update the account's index to the current index since we are distributing accrued LEND
         if (supplierIndex == 0 && supplyIndex >= LEND_INITIAL_INDEX) {
+            //@>audit this comment seems wrong as this function is copied from distributeBorrowerLend
             // Covers the case where users borrowed tokens before the market's borrow state index was set.
             // Rewards the user with LEND accrued from the start of when borrower rewards were first
             // set for the market.
@@ -339,6 +380,25 @@ contract LendStorage is Ownable, ExponentialNoError {
      * @param lToken The address of the lToken representing the asset
      * @param borrower The address of the borrower
      */
+    /*
+   
+## Why Reward Borrowers?
+
+Borrowers receive LEND rewards for several key reasons:
+
+1. **Protocol Utilization**: Borrowing activity is essential for the protocol's purpose - incentivizing borrowers helps maintain liquidity utilization
+   
+2. **Market Balance**: Rewarding both sides of the market (suppliers and borrowers) creates a balanced ecosystem
+
+3. **Competitive Strategy**: Most DeFi lending protocols reward borrowers to attract users and remain competitive
+
+4. **Protocol Revenue**: Borrowers generate interest payments that benefit suppliers and the protocol
+
+5. **Governance Participation**: Distributing LEND to borrowers gives them a stake in governance decisions
+
+This dual-incentive structure helps bootstrap liquidity and usage on both sides of the lending market.
+
+    */
     function distributeBorrowerLend(address lToken, address borrower) external onlyAuthorized {
         // Trigger borrow index update
         LendtrollerInterfaceV2(lendtroller).triggerBorrowIndexUpdate(lToken);
@@ -361,6 +421,7 @@ contract LendStorage is Ownable, ExponentialNoError {
         // Calculate change in the cumulative sum of the LEND per borrowed unit accrued
         Double memory deltaIndex = Double({mantissa: sub_(borrowIndex, borrowerIndex)});
 
+        //@>i critical amount 
         // Calculate the appropriate account balance and delta based on supply or borrow
         uint256 borrowerAmount = div_(
             add_(borrowWithInterest(borrower, lToken), borrowWithInterestSame(borrower, lToken)),
@@ -382,6 +443,8 @@ contract LendStorage is Ownable, ExponentialNoError {
      * @param borrowAmount The amount of tokens being borrowed.
      * @return An enum indicating the error status, the sum of borrowed amount plus effects, and the sum of collateral.
      */
+    //@>i used in borrow  & liquidating
+    //@>i Critical: Core to all lending decisions, it users can borrow, redeem, be liquidated
     function getHypotheticalAccountLiquidityCollateral(
         address account,
         LToken lTokenModify,
@@ -390,20 +453,30 @@ contract LendStorage is Ownable, ExponentialNoError {
     ) public view returns (uint256, uint256) {
         AccountLiquidityLocalVars memory vars;
 
+        //@>q there is no checks here? 
+
+        //@>q suppliedAssets are underlying assets? No it's the ltokens of a user
         // Calculate collateral value from supplied assets
         address[] memory suppliedAssets = userSuppliedAssets[account].values();
         address[] memory borrowedAssets = userBorrowedAssets[account].values();
 
         // First loop: Calculate collateral value from supplied assets
         for (uint256 i = 0; i < suppliedAssets.length;) {
+            //@>i if the suppliedAssets[i] is not a valid LTOKEN contract it will revert
             LToken asset = LToken(suppliedAssets[i]);
+
             uint256 lTokenBalanceInternal = totalInvestment[account][address(asset)];
 
+
+            //@>i Exp is a wrapper object for raw mantissa
             // Get collateral factor and price for this asset
             vars.collateralFactor =
                 Exp({mantissa: LendtrollerInterfaceV2(lendtroller).getCollateralFactorMantissa(address(asset))});
+                
+            //exchangeRate = how much underlying asset each ltoken worth
             vars.exchangeRate = Exp({mantissa: asset.exchangeRateStored()});
 
+            //@>q why no price freshness check?
             vars.oraclePriceMantissa = UniswapAnchoredViewInterface(priceOracle).getUnderlyingPrice(asset);
             vars.oraclePrice = Exp({mantissa: vars.oraclePriceMantissa});
             vars.tokensToDenom = mul_(mul_(vars.collateralFactor, vars.exchangeRate), vars.oraclePrice);
@@ -481,19 +554,21 @@ contract LendStorage is Ownable, ExponentialNoError {
 
         Borrow[] memory borrows = crossChainBorrows[borrower][_token];
         Borrow[] memory collaterals = crossChainCollaterals[borrower][_token];
-
+        //@>q how can we break this invariant?
         require(borrows.length == 0 || collaterals.length == 0, "Invariant violated: both mappings populated");
         // Only one mapping should be populated:
-        if (borrows.length > 0) {
+        if (borrows.length > 0) { //@>i process borrows
             for (uint256 i = 0; i < borrows.length; i++) {
+                //@>i only counts current chain
                 if (borrows[i].srcEid == currentEid) {
                     borrowedAmount +=
                         (borrows[i].principle * LTokenInterface(_lToken).borrowIndex()) / borrows[i].borrowIndex;
                 }
             }
-        } else {
+        } else { //@>i process collaterals
             for (uint256 i = 0; i < collaterals.length; i++) {
                 // Only include a cross-chain collateral borrow if it originated locally.
+                //@>audit the following condition is countinutitive.it also contradicts with the comment. it seems too restrictive and it should check only srcEid not the destEit
                 if (collaterals[i].destEid == currentEid && collaterals[i].srcEid == currentEid) {
                     borrowedAmount +=
                         (collaterals[i].principle * LTokenInterface(_lToken).borrowIndex()) / collaterals[i].borrowIndex;

@@ -141,7 +141,7 @@ What are the gas implications of complex calculation functions? can we create a 
         _;
     }
 
-    constructor(address _lendtroller, address _priceOracleAddress, uint32 _currentEid) {
+    constructor(address _lendtroller, address _priceOracleAddress, uint32 _currentEid) Ownable(msg.sender) {
         require(_lendtroller != address(0), "Invalid lendtroller");
         require(_priceOracleAddress != address(0), "Invalid oracle");
         lendtroller = _lendtroller;

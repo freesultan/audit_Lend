@@ -2,7 +2,7 @@
 pragma solidity 0.8.23;
 
 import {Script} from "forge-std/Script.sol";
-import {ERC20Mock} from "@openzeppelin/contracts/mocks/ERC20Mock.sol";
+import {ERC20Mock} from "@openzeppelin/contracts/mocks/token/ERC20Mock.sol";
 import {WETH9} from "../test/mocks/WETH9.sol";
 
 contract HelperConfig is Script {

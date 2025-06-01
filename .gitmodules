@@ -22,3 +22,9 @@
 [submodule "Lend-V2/lib/pyth-sdk-solidity"]
 	path = Lend-V2/lib/pyth-sdk-solidity
 	url = https://github.com/pyth-network/pyth-sdk-solidity
+[submodule "Lend-V2/lib/layerzero-v2"]
+	path = Lend-V2/lib/layerzero-v2
+	url = https://github.com/LayerZero-Labs/layerzero-v2
+[submodule "Lend-V2/lib/devtools"]
+	path = Lend-V2/lib/devtools
+	url = https://github.com/LayerZero-Labs/devtools

@@ -36,7 +36,7 @@ contract CoreRouter is Ownable, ExponentialNoError {
         address indexed liquidator, address indexed lToken, address indexed borrower, address lTokenCollateral
     );
 
-    constructor(address _lendStorage, address _priceOracle, address _lendtroller) {
+    constructor(address _lendStorage, address _priceOracle, address _lendtroller) Ownable(msg.sender){
         require(_lendStorage != address(0), "Invalid storage address");
         lendStorage = LendStorage(_lendStorage);
         priceOracle = _priceOracle;
@@ -90,7 +90,7 @@ contract CoreRouter is Ownable, ExponentialNoError {
 
         lendStorage.distributeSupplierLend(_lToken, msg.sender);
 
-        //@>q totalInvestment: Is it lToken balance or underlying balance? Investment :  user's total investment per lToken
+        //@>i totalInvestment: user's total investment per lToken
         // Update total investment using calculated mintTokens
         lendStorage.updateTotalInvestment(
             msg.sender, _lToken, lendStorage.totalInvestment(msg.sender, _lToken) + mintTokens

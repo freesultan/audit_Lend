@@ -124,12 +124,14 @@ contract CrossChainRouter is OApp, ExponentialNoError {
     function borrowCrossChain(uint256 _amount, address _borrowToken, uint32 _destEid) external payable {
         require(msg.sender != address(0), "Invalid sender");
         require(_amount != 0, "Zero borrow amount");
+        //@>q this check is too generic. why shouldn't check just sufficient amount?
         require(address(this).balance > 0, "Out of money");
 
         // Get source lToken for collateral
         address _lToken = lendStorage.underlyingTolToken(_borrowToken);
         require(_lToken != address(0), "Unsupported source token");
-
+    
+        //@>q what if someone call this unsupported chain? it returns zero and cut in the next check
         // Get the destination chain's version of the token
         address destLToken = lendStorage.underlyingToDestlToken(_borrowToken, _destEid);
         require(destLToken != address(0), "Unsupported destination token");
@@ -138,17 +140,20 @@ contract CrossChainRouter is OApp, ExponentialNoError {
         LTokenInterface(_lToken).accrueInterest();
 
         // Add collateral tracking on source chain
+        //@>audit only authorized contracts. Assumes user has supplied collateral but doesn't verify. could borrow without collateral?
         lendStorage.addUserSuppliedAsset(msg.sender, _lToken);
 
         if (!isMarketEntered(msg.sender, _lToken)) {
-            enterMarkets(_lToken);
+            //@>i enter market: register this asset as collateral that can be used to secure loans
+            enterMarkets(_lToken); //@>q who is the msg.sender here? crosschain contract? if so , why we enter this contract to use ltoken in markets? 
         }
 
+        
         // Get current collateral amount for the LayerZero message
         // This will be used on dest chain to check if sufficient
         (, uint256 collateral) =
             lendStorage.getHypotheticalAccountLiquidityCollateral(msg.sender, LToken(_lToken), 0, 0);
-
+        //@>q no check for collateral > 0 or collateral >= borrowed amount
         // Send message to destination chain with verified sender
         // borrowIndex of 0 initially - will be set correctly on dest chain
         _send(
@@ -162,6 +167,7 @@ contract CrossChainRouter is OApp, ExponentialNoError {
             _borrowToken,
             ContractType.BorrowCrossChain
         );
+        
     }
 
     function repayCrossChainBorrow(address _borrower, uint256 _amount, address _lToken, uint32 _srcEid) external {
@@ -341,6 +347,7 @@ contract CrossChainRouter is OApp, ExponentialNoError {
         lendStorage.distributeSupplierLend(payload.destlToken, payload.sender); // borrower
         lendStorage.distributeSupplierLend(payload.destlToken, payload.liquidator); // liquidator
 
+        //@>audit  Critical Issue: 1- Could underflow if totalInvestment < payload.amount . 2- No validation that borrower actually has this much collateral
         // Update total investment for borrower
         lendStorage.updateTotalInvestment(
             payload.sender,
@@ -348,6 +355,7 @@ contract CrossChainRouter is OApp, ExponentialNoError {
             lendStorage.totalInvestment(payload.sender, payload.destlToken) - payload.amount
         );
 
+        //@>audit No verification that liquidation actually happened on debt chain
         // Update total investment for liquidator
         lendStorage.updateTotalInvestment(
             payload.liquidator,
@@ -600,6 +608,8 @@ contract CrossChainRouter is OApp, ExponentialNoError {
      */
     //@>i Execute borrow, updata state, send confirmation
     function _handleBorrowCrossChainRequest(LZPayload memory payload, uint32 srcEid) private {
+
+ 
         // Accrue interest on borrowed token on destination chain
         LTokenInterface(payload.destlToken).accrueInterest();
 
@@ -612,7 +622,7 @@ contract CrossChainRouter is OApp, ExponentialNoError {
         // Check if user has any existing borrows on this chain
         bool found = false;
         uint256 index;
-
+        //@>q why does not check payload.sender is valid?
         LendStorage.Borrow[] memory userCrossChainCollaterals =
             lendStorage.getCrossChainCollaterals(payload.sender, destUnderlying);
 
@@ -638,7 +648,9 @@ contract CrossChainRouter is OApp, ExponentialNoError {
         (uint256 totalBorrowed,) = lendStorage.getHypotheticalAccountLiquidityCollateral(
             payload.sender, LToken(payable(payload.destlToken)), 0, payload.amount
         );
-
+        //@>i here we check payload.collateral >= totalBorrowed
+        //@>audit payload.collateral is from src chain can could be stale.Time gap between collateral calculation on Chain A and validation on Chain B .Attacker could manipulate prices or liquidate collateral in between
+        //@>i No oracle price validation between chains
         // Verify the collateral from source chain is sufficient for total borrowed amount
         require(payload.collateral >= totalBorrowed, "Insufficient collateral");
 
@@ -761,9 +773,9 @@ contract CrossChainRouter is OApp, ExponentialNoError {
      * @param _payload The payload of the message.
      */
     //@>i Internal function, only callable by LayerZero 
-    //@>q why there is no replay protection here? No nonce or unique ID checking
+    //@>q why there is no replay protection here? No nonce or unique ID checking - Vulnerable to malicious messages from compromised chains
     function _lzReceive(
-        Origin calldata _origin,
+        Origin calldata _origin, //@>i origin chain - sender chain
         bytes32, /*_guid*/
         bytes calldata _payload,
         address, /*_executor*/
@@ -772,9 +784,10 @@ contract CrossChainRouter is OApp, ExponentialNoError {
         //@>audit there is no expiration for cross-chain message. message can delay signigicantly. liquidation validity is checked on chainA(collateral chain) using current market prices in _checkliquidationValid. Delay between initiating liquidation on chainB and verification on chainA may lead to drastic change in market conditions : 1 - allow liquidation when user is no longer undercollateralized 2- prevent ligitimate liquidation if prices move favorably for the borrower
         LZPayload memory payload;
 
+
         // Decode individual fields from payload
         (
-            payload.amount,
+            payload.amount, 
             payload.borrowIndex,
             payload.collateral,
             payload.sender,
@@ -787,6 +800,7 @@ contract CrossChainRouter is OApp, ExponentialNoError {
         //@>q why there is no validation for decoded data? no zero,large, and out of bound checks
 
         uint32 srcEid = _origin.srcEid;
+
         //@>i this cast will revert if contractType is out of bound
         ContractType cType = ContractType(payload.contractType);
 
@@ -846,7 +860,7 @@ contract CrossChainRouter is OApp, ExponentialNoError {
             abi.encode(_amount, _borrowIndex, _collateral, _sender, _destlToken, _liquidator, _srcToken, ctype);
 
         bytes memory options = OptionsBuilder.newOptions().addExecutorLzReceiveOption(1_000_000, 0);
-
+         //@>i 
         _lzSend(_dstEid, payload, options, MessagingFee(address(this).balance, 0), payable(address(this)));
     }
 }

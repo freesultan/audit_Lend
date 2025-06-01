@@ -8,7 +8,7 @@ import {CrossChainRouterMock} from "./mocks/CrossChainRouterMock.sol";
 import {CoreRouter} from "../src/LayerZero/CoreRouter.sol";
 import {LendStorage} from "../src/LayerZero/LendStorage.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {ERC20Mock} from "@openzeppelin/contracts/mocks/ERC20Mock.sol";
+import {ERC20Mock} from "@openzeppelin/contracts/mocks/token/ERC20Mock.sol";
 import {Lendtroller} from "../src/Lendtroller.sol";
 import {InterestRateModel} from "../src/InterestRateModel.sol";
 import {SimplePriceOracle} from "../src/SimplePriceOracle.sol";

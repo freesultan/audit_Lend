@@ -6,3 +6,5 @@ solidity-bytes-utils/=lib/solidity-bytes-utils
 @openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/
 @openzeppelin/contracts-upgradeable/=lib/openzeppelin-contracts-upgradeable/contracts/
 @pythnetwork/pyth-sdk-solidity/=lib/pyth-sdk-solidity/
+@layerzerolabs/oapp-evm/=lib/devtools/packages/oapp-evm/
+ 

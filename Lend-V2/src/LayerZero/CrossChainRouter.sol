@@ -651,6 +651,7 @@ contract CrossChainRouter is OApp, ExponentialNoError {
         //@>i here we check payload.collateral >= totalBorrowed
         //@>audit payload.collateral is from src chain can could be stale.Time gap between collateral calculation on Chain A and validation on Chain B .Attacker could manipulate prices or liquidate collateral in between
         //@>i No oracle price validation between chains
+        
         // Verify the collateral from source chain is sufficient for total borrowed amount
         require(payload.collateral >= totalBorrowed, "Insufficient collateral");
 
@@ -742,6 +743,7 @@ contract CrossChainRouter is OApp, ExponentialNoError {
             // Update existing borrow
             LendStorage.Borrow[] memory userBorrows = lendStorage.getCrossChainBorrows(payload.sender, payload.srcToken);
             userBorrows[index].principle = userBorrows[index].principle + payload.amount;
+            //@>q Do we need to check or verify borrowIndex? for example it can be manipulated to max edge
             userBorrows[index].borrowIndex = payload.borrowIndex;
 
             // Update in storage
@@ -752,7 +754,8 @@ contract CrossChainRouter is OApp, ExponentialNoError {
                 payload.sender,
                 payload.srcToken,
                 LendStorage.Borrow(
-                    srcEid, currentEid, payload.amount, payload.borrowIndex, payload.destlToken, payload.srcToken
+                    srcEid, currentEid, payload.amount, payload.borrowIndex //@>q not checking borrowIndex?
+                    , payload.destlToken, payload.srcToken
                 )
             );
         }
@@ -776,7 +779,7 @@ contract CrossChainRouter is OApp, ExponentialNoError {
     //@>q why there is no replay protection here? No nonce or unique ID checking - Vulnerable to malicious messages from compromised chains
     function _lzReceive(
         Origin calldata _origin, //@>i origin chain - sender chain
-        bytes32, /*_guid*/
+        bytes32, /*_guid*/ //@>q why this guid is ignored by the protocol?
         bytes calldata _payload,
         address, /*_executor*/
         bytes calldata /*_extraData*/
@@ -784,11 +787,11 @@ contract CrossChainRouter is OApp, ExponentialNoError {
         //@>audit there is no expiration for cross-chain message. message can delay signigicantly. liquidation validity is checked on chainA(collateral chain) using current market prices in _checkliquidationValid. Delay between initiating liquidation on chainB and verification on chainA may lead to drastic change in market conditions : 1 - allow liquidation when user is no longer undercollateralized 2- prevent ligitimate liquidation if prices move favorably for the borrower
         LZPayload memory payload;
 
-
+        //@>q can a malecious actor manipulate/craft this payload  and send to other chain? for example, too large borrowIndex (erase debt) or too small borrowIndex (attack other users by inflation)
         // Decode individual fields from payload
         (
             payload.amount, 
-            payload.borrowIndex,
+            payload.borrowIndex, //@>q can any one use type(uint256).max
             payload.collateral,
             payload.sender,
             payload.destlToken,
@@ -798,7 +801,7 @@ contract CrossChainRouter is OApp, ExponentialNoError {
         ) = abi.decode(_payload, (uint256, uint256, uint256, address, address, address, address, uint8));
 
         //@>q why there is no validation for decoded data? no zero,large, and out of bound checks
-
+        //@>audit there is no checks for message freshenss or economic conditions if the message has delays for example for a long time
         uint32 srcEid = _origin.srcEid;
 
         //@>i this cast will revert if contractType is out of bound

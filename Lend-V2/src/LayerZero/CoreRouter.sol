@@ -78,6 +78,7 @@ contract CoreRouter is Ownable, ExponentialNoError {
         //@>q exchangeRateStored may be staled? shouldn't we use exchangeRateCurrent?
 
         //@>i lTokens are minted for corerouter not users. BAlances are managed in lendstorage. This is a significant deviation from standard Compound V2 where users directly hold their lTokens
+        //@>q why here the _amount is minted in _lToken. should _token amount user is transfering to this contract be equal to amount of lToken minted?
         // Mint lTokens @>i User Tokens → CoreRouter → lToken.mint() → lTokens minted to CoreRouter
         require(LErc20Interface(_lToken).mint(_amount) == 0, "Mint failed");
 
@@ -116,6 +117,7 @@ contract CoreRouter is Ownable, ExponentialNoError {
         require(lendStorage.totalInvestment(msg.sender, _lToken) >= _amount, "Insufficient balance");
 
         // Check liquidity -Checks if redeem would cause undercollateralization
+
         (uint256 borrowed, uint256 collateral) =
             lendStorage.getHypotheticalAccountLiquidityCollateral(msg.sender, LToken(_lToken), _amount, 0);
         require(collateral >= borrowed, "Insufficient liquidity");
@@ -164,6 +166,7 @@ contract CoreRouter is Ownable, ExponentialNoError {
         LTokenInterface(_lToken).accrueInterest();
 
         (uint256 borrowed, uint256 collateral) =
+            //@>i parameters: (account, lToken, redeem tokens, borrowamount)
             lendStorage.getHypotheticalAccountLiquidityCollateral(msg.sender, LToken(payable(_lToken)), 0, _amount);
 
         LendStorage.BorrowMarketState memory currentBorrow = lendStorage.getBorrowBalance(msg.sender, _lToken);

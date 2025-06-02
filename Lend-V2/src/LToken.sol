@@ -288,7 +288,8 @@ abstract contract LToken is LTokenInterface, ExponentialNoError, TokenErrorRepor
      * @return calculated exchange rate scaled by 1e18
      */
     function exchangeRateStoredInternal() internal view virtual returns (uint256) {
-        uint256 _totalSupply = totalSupply;
+        
+        uint256 _totalSupply = totalSupply; //@>i the amount of lTokens minted
         if (_totalSupply == 0) {
             /*
              * If there are no tokens minted:
@@ -299,6 +300,10 @@ abstract contract LToken is LTokenInterface, ExponentialNoError, TokenErrorRepor
             /*
              * Otherwise:
              *  exchangeRate = (totalCash + totalBorrows - totalReserves) / totalSupply
+             * totalCash = amount of underlying asset
+             * totalBorrows = total amount of underlying asset borrowed
+             * totalReserves = total amount of reserves collected from interest payments
+             * expScale = scalling factor (1e18)
              */
             uint256 totalCash = getCashPrior();
             uint256 cashPlusBorrowsMinusReserves = totalCash + totalBorrows - totalReserves;

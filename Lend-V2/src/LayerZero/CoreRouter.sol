@@ -223,12 +223,12 @@ contract CoreRouter is Ownable, ExponentialNoError {
         require(msg.sender == crossChainRouter, "Access Denied");
 
         require(LErc20Interface(_destlToken).borrow(_amount) == 0, "Borrow failed");
-        //@>q can ervert silently? 
+        //@>q can revert silently? 
         IERC20(_destUnderlying).transfer(_borrower, _amount);
          // @>q how can someone make use of this silent revert to exploit?
          // require(IERC20(_destUnderlying).transfer(_borrower, _amount), "Transfer failed");
 
-
+        
     }
 
     /**

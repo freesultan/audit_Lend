@@ -651,7 +651,6 @@ contract CrossChainRouter is OApp, ExponentialNoError {
         //@>i here we check payload.collateral >= totalBorrowed
         //@>audit payload.collateral is from src chain can could be stale.Time gap between collateral calculation on Chain A and validation on Chain B .Attacker could manipulate prices or liquidate collateral in between
         //@>i No oracle price validation between chains
-        
         // Verify the collateral from source chain is sufficient for total borrowed amount
         require(payload.collateral >= totalBorrowed, "Insufficient collateral");
 

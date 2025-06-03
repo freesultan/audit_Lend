@@ -57,8 +57,8 @@ What are the gas implications of complex calculation functions? can we create a 
         uint256 srcEid; // Source chain's layer zero endpoint id
         uint256 destEid; // Destination chain's layer zero endpoint id
         uint256 principle; // Borrowed token amount
-        uint256 borrowIndex; // Borrow index
-        address borrowedlToken; // Address of the borrower //@>q what's this?
+        uint256 borrowIndex; // Borrow index 
+        address borrowedlToken; // Address of the borrower //@>q what's this? it should be address of ltoken
         address srcToken; // Source token address
     }
 
@@ -478,6 +478,7 @@ This dual-incentive structure helps bootstrap liquidity and usage on both sides 
 
             //@>q why no price freshness check?
             vars.oraclePriceMantissa = UniswapAnchoredViewInterface(priceOracle).getUnderlyingPrice(asset);
+            //@>audit it seems we should check oraclePriceMantissa here
             vars.oraclePrice = Exp({mantissa: vars.oraclePriceMantissa});
             vars.tokensToDenom = mul_(mul_(vars.collateralFactor, vars.exchangeRate), vars.oraclePrice);
 
@@ -554,8 +555,10 @@ This dual-incentive structure helps bootstrap liquidity and usage on both sides 
 
         Borrow[] memory borrows = crossChainBorrows[borrower][_token];
         Borrow[] memory collaterals = crossChainCollaterals[borrower][_token];
+
         //@>q how can we break this invariant?
         require(borrows.length == 0 || collaterals.length == 0, "Invariant violated: both mappings populated");
+
         // Only one mapping should be populated:
         if (borrows.length > 0) { //@>i process borrows
             for (uint256 i = 0; i < borrows.length; i++) {
@@ -706,6 +709,7 @@ This dual-incentive structure helps bootstrap liquidity and usage on both sides 
         uint256 exchangeRate = LTokenInterface(lToken).exchangeRateStored();
 
         return lTokenBalance * exchangeRate / 1e18;
+        //@>audit: use safemath to prevent overflow: lTokenBalance.mul(exchangeRate).div(1e18)
     }
 
     function min(uint256 a, uint256 b) internal pure returns (uint256) {

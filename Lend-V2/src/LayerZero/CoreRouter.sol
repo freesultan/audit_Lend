@@ -333,7 +333,7 @@ contract CoreRouter is Ownable, ExponentialNoError {
 
         // Revert if borrower collateral token balance < seizeTokens
         require(lendStorage.totalInvestment(borrower, lTokenCollateral) >= seizeTokens, "Insufficient collateral");
-
+        //@>missed I didn't follow this flow, I didn't understand how seizeTokens are calculated, I didn't check if the protocol owner can withdraw protocol share
         uint256 currentReward = mul_(seizeTokens, Exp({mantissa: lendStorage.PROTOCOL_SEIZE_SHARE_MANTISSA()}));
 
         // Just for safety, Never gonna occur
@@ -444,6 +444,7 @@ contract CoreRouter is Ownable, ExponentialNoError {
 
         for (uint256 j = 0; j < holders.length;) {
             uint256 accrued = lendStorage.lendAccrued(holders[j]);
+            //@>Missed   I didn't know how claimLend and grantLendInternal are working! Compound's correct implementation resets the accrued balance after granting:
             if (accrued > 0) {
                 grantLendInternal(holders[j], accrued);
             }
